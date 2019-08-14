@@ -9,7 +9,7 @@ from os.path import join
 import zipfile
 import requests
 import logging
-
+import calendar
 
 from electricitylci.globals import data_dir, output_dir
 from electricitylci.bulk_eia_data import download_EBA, row_to_df, ba_exchange_to_df
@@ -40,6 +40,8 @@ from electricitylci.process_dictionary_writer import *
         Description of a group of regions. Options include 'FERC' for all FERC 
         market regions, 'BA' for all balancing authorities.
    
+    month: int (optional) 
+    
     Returns
     -------
     DataFrame with import region, export region, transaction amount, total
@@ -56,9 +58,9 @@ from electricitylci.process_dictionary_writer import *
         
 """
 
-def ba_io_trading_model(year, subregion):
+def ba_io_trading_model(year, subregion, month = None):
     
-    year = 2016
+    #year = 2016
     #subregion = 'BA'
    
     #Read in BAA file which contains the names and abbreviations
@@ -131,8 +133,15 @@ def ba_io_trading_model(year, subregion):
     ]
     logging.info("Pivoting")
     #Subset for specified eia_gen_year
-    start_datetime = '{}-01-01 00:00:00+00:00'.format(year)
-    end_datetime = '{}-12-31 23:00:00+00:00'.format(year)
+    
+    if month:
+        end_days = calendar.monthrange(year, month)[1]
+        start_datetime = '{}-{}-01 00:00:00+00:00'.format(year, month)
+        end_datetime = '{}-{}-{} 23:00:00+00:00'.format(year, month, end_days)
+        
+    else:
+        start_datetime = '{}-01-01 00:00:00+00:00'.format(year)
+        end_datetime = '{}-12-31 23:00:00+00:00'.format(year)
     
     start_datetime = datetime.strptime(start_datetime, '%Y-%m-%d %H:%M:%S%z')
     end_datetime = datetime.strptime(end_datetime, '%Y-%m-%d %H:%M:%S%z')  
@@ -172,7 +181,12 @@ def ba_io_trading_model(year, subregion):
     df_net_gen_sum = df_net_gen.sum(axis = 0).to_frame()
     logging.info("Reading canadian import data")
     #Add Canadian import data to the net generation dataset, concatenate and put in alpha order
-    df_CA_Imports_Gen = pd.read_csv(data_dir + '/CA_Imports_Gen.csv', index_col = 0)   
+    df_CA_Imports_Gen = pd.read_csv(data_dir + '/CA_Imports_Gen.csv', index_col = 0) 
+    
+    #If using monthly data, need to divide CA imports by 12 since its annual
+    if month:
+        df_CA_Imports_Gen = df_CA_Imports_Gen/12
+    
     df_CA_Imports_Gen = df_CA_Imports_Gen[str(year)]
     
     
@@ -323,9 +337,14 @@ def ba_io_trading_model(year, subregion):
     # CA imports are specified in an external file
     df_CA_Imports_Cols = pd.read_csv(data_dir + '/CA_Imports_Cols.csv', index_col = 0)
     
+    
     df_CA_Imports_Rows = pd.read_csv(data_dir + '/CA_Imports_Rows.csv', index_col = 0)
     df_CA_Imports_Rows = df_CA_Imports_Rows[['us_ba', str(year)]]
     df_CA_Imports_Rows = df_CA_Imports_Rows.pivot(columns = 'us_ba', values = str(year))
+
+    #If using monthly data, need to divide CA imports by 12 since its annual     
+    if month:
+        df_CA_Imports_Rows = df_CA_Imports_Rows/12
             
     df_concat_trade_CA = pd.concat([df_trade_pivot, df_CA_Imports_Rows])
     df_concat_trade_CA = pd.concat([df_concat_trade_CA, df_CA_Imports_Cols], axis = 1)
@@ -449,7 +468,6 @@ def ba_io_trading_model(year, subregion):
     BAA_filt = BAA_final_trade['import BAA'].isin(US_BA_acronyms)
     BAA_final_trade = BAA_final_trade[BAA_filt]    
     BAA_final_trade.to_csv(output_dir + '/BAA_final_trade_{}.csv'.format(year))
-    
     #Develop final df for FERC Market Region
     ferc_final_trade = df_final_trade_out_filt_melted_merge.copy()
     ferc_final_trade = ferc_final_trade.groupby(['import ferc region abbr', 'import ferc region', 'export ferc region','export ferc region abbr'])['value'].sum().reset_index()
